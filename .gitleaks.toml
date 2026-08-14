@@ -1,0 +1,106 @@
+# ============================================
+# gitleaks 커스텀 설정
+# ============================================
+
+[extend]
+useDefault = true
+
+# ------------------------------------------
+# 허용 목록 (False Positive 방지)
+# ------------------------------------------
+[allowlist]
+description = "허용된 패턴 및 파일"
+
+# 문서 파일 내 예시 패턴 허용
+paths = [
+    '''SECURITY_GUIDE\.md$''',
+    '''README\.md$''',
+    '''.*\.example$''',
+    '''.*_example\..*''',
+]
+
+# 예시용 버킷명 허용
+regexes = [
+    '''s3://example-[a-z\-]+''',
+]
+
+# ------------------------------------------
+# 커스텀 룰 (추가 탐지)
+# ------------------------------------------
+
+# 한국 전화번호 (URL 내 타임스탬프 제외)
+[[rules]]
+id = "korean-phone-number"
+description = "Korean mobile phone number"
+regex = '''["'\s,:]010[0-9]{8}["'\s,]'''
+tags = ["pii", "phone"]
+
+# 내부 IP 주소 (10.x.x.x)
+[[rules]]
+id = "internal-ip-10"
+description = "Internal IP address (10.x.x.x)"
+regex = '''10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'''
+tags = ["network", "internal"]
+
+# 내부 IP 주소 (192.168.x.x)
+[[rules]]
+id = "internal-ip-192"
+description = "Internal IP address (192.168.x.x)"
+regex = '''192\.168\.[0-9]{1,3}\.[0-9]{1,3}'''
+tags = ["network", "internal"]
+
+# 내부 IP 주소 (112.185.x.x)
+[[rules]]
+id = "internal-ip-112"
+description = "Internal IP address (112.185.x.x)"
+regex = '''112\.185\.[0-9]{1,3}\.[0-9]{1,3}'''
+tags = ["network", "internal"]
+
+# Slack Webhook URL
+[[rules]]
+id = "slack-webhook-url"
+description = "Slack Webhook URL"
+regex = '''hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[a-zA-Z0-9]+'''
+tags = ["webhook", "slack"]
+
+# 회사명 노출
+[[rules]]
+id = "company-name"
+description = "Company name exposure"
+regex = '''(?i)(masang|마상)'''
+tags = ["company", "internal"]
+
+# S3 버킷명
+[[rules]]
+id = "s3-bucket-name"
+description = "S3 bucket name"
+regex = '''s3://[a-z0-9][a-z0-9\-]+'''
+tags = ["aws", "internal"]
+
+# 내부 경로 (Linux)
+[[rules]]
+id = "internal-path-linux"
+description = "Internal path exposure (Linux)"
+regex = '''/masang[_/a-zA-Z0-9]*'''
+tags = ["path", "internal"]
+
+# 내부 경로 (Windows)
+[[rules]]
+id = "internal-path-windows"
+description = "Internal path exposure (Windows)"
+regex = '''[A-Z]:\\[Mm]asang\\'''
+tags = ["path", "internal"]
+
+# 사용자명 노출
+[[rules]]
+id = "username-exposure"
+description = "Username exposure in path"
+regex = '''(?i)(\\yhha\\|/yhha/)'''
+tags = ["username", "internal"]
+
+# 게임/서비스명 노출
+[[rules]]
+id = "service-name"
+description = "Internal service/game name"
+regex = '''(?i)(aceonline|dkonline|pristontale|gunz|nativex)'''
+tags = ["service", "internal"]
