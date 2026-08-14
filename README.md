@@ -6,36 +6,34 @@
 
 ```
 .
-├── projects/                        # 독립 프로젝트
-│   ├── monitoring-dashboard/        # 통합 모니터링 GUI (Python/Tkinter)
-│   └── password-manager/            # 패스워드 관리 도구
+├── projects/                           # 독립 프로젝트
+│   ├── monitoring-dashboard/           # 통합 모니터링 GUI (Python/Tkinter)
+│   └── password-manager/               # 패스워드 관리 도구 (Python/Tkinter)
 │
-└── scripts/                         # 운영 스크립트
-    ├── backup/                      # 백업 자동화
+└── scripts/                            # 운영 스크립트
+    ├── backup/                         # 백업 자동화
     │   ├── bash/
-    │   │   ├── internal_bkup/       # 내부 백업 (DB, Zabbix, AWS)
+    │   │   ├── internal_bkup/          # 내부 백업 (DB, Zabbix, AWS)
     │   │   └── company_backup/         # S3 백업, 2차 백업
-    │   └── bat/                     # Windows 백업 스크립트
+    │   └── bat/                        # Windows 백업 스크립트
     │
-    ├── gitlab/                      # GitLab 관리
+    ├── gitlab/                         # GitLab 관리
     │   └── bash/
-    │       ├── dev_git/             # 백업, 복구, 업그레이드
-    │       └── seoul_git/           # 미러링, S3 백업
+    │       ├── dev_git/                # 백업, 복구, 업그레이드
+    │       └── seoul_git/              # 미러링, S3 백업
     │
-    ├── monitoring/                  # 시스템 헬스체크
-    │   ├── bash/
-    │   │   └── system_health_check.sh
-    │   └── ps1/
-    │       └── system_health_check.ps1
+    ├── monitoring/                     # 시스템 헬스체크
+    │   ├── bash/system_health_check.sh
+    │   └── ps1/system_health_check.ps1
     │
-    ├── install/                     # 설치 스크립트
+    ├── install/                        # 설치 스크립트
     │   └── bash/
-    │       ├── ELK_install.sh       # ELK Stack 설치
-    │       └── softether.sh         # SoftEther VPN 설치
+    │       ├── ELK_install.sh          # ELK Stack 설치
+    │       └── softether.sh            # SoftEther VPN 설치
     │
-    └── etc/                         # 기타 유틸리티
-        ├── bat/
-        └── ps1/
+    └── etc/                            # 기타 유틸리티
+        ├── bat/                        # Windows 압축 스크립트
+        └── ps1/                        # PowerShell 유틸리티
 ```
 
 ## 주요 프로젝트
@@ -51,17 +49,18 @@
 
 ### password-manager
 
-서버 계정 패스워드를 안전하게 관리하는 도구
+서버 계정 및 인증 정보를 안전하게 관리하는 GUI 도구
 
-- MySQL 연동 패스워드 저장
-- 암호화 저장 및 조회
-- 백업 및 동기화
+- AES-256 암호화 저장
+- TOTP(2FA) 지원
+- 그룹별 분류 및 검색
+- JSON 기반 데이터 저장
 
 ## 주요 스크립트
 
 ### scripts/backup
 
-- **2차 백업**: 게임 서버 → IDC (rsync)
+- **2차 백업**: 서버 → IDC (rsync)
 - **3차 백업**: IDC → S3 (zstd 압축, 무결성 검증)
 - **내부 백업**: DB, Zabbix, AWS 설정 백업
 
@@ -79,14 +78,14 @@
 
 ### scripts/install
 
-- ELK Stack 자동 설치
-- SoftEther VPN 설치
+- ELK Stack (Elasticsearch, Logstash, Kibana) 자동 설치
+- SoftEther VPN Server 설치
 
 ## 기술 스택
 
 - **언어**: Bash, Python, PowerShell, Batch
 - **인프라**: AWS (S3, EC2), IDC, Linux, Windows Server
-- **도구**: ELK Stack, Zabbix, GitLab, rsync, MySQL
+- **도구**: ELK Stack, Zabbix, GitLab, rsync
 
 ## 사용 방법
 
