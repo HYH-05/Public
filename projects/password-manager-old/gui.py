@@ -82,7 +82,7 @@ class PasswordManagerApp:
         file_menu = tk.Menu(menubar, tearoff=0, bg=styles.CARD_BG, fg=styles.TEXT,
                             activebackground=styles.ACCENT, activeforeground="white",
                             font=("Arial", 10))
-        file_menu.add_command(label="CSV 내보내기", command=self._export_csv)
+        file_menu.add_command(label="CSV 내보내기", command=self._  export_csv)
         file_menu.add_command(label="CSV 가져오기", command=self._import_csv)
         file_menu.add_separator()
         file_menu.add_command(label="마스터 비밀번호 변경", command=self._change_master_pw)
@@ -281,17 +281,55 @@ class PasswordManagerApp:
     #  자동 로그아웃
     # ================================================================
     def _setup_auto_logout(self):
-        self.remaining_time = AUTO_LOGOUT_SEC
-        self._reset_timer()
-        self._update_countdown()
-        for event in ("<Any-KeyPress>", "<Any-ButtonPress>", "<Motion>"):
-            self.root.bind_all(event, self._reset_timer)
+        self._check_idle_and_update()
 
-    def _reset_timer(self, event=None):
-        if self.inactivity_timer:
-            self.root.after_cancel(self.inactivity_timer)
-        self.inactivity_timer = self.root.after(AUTO_LOGOUT_SEC * 1000, self._auto_logout)
-        self.remaining_time = AUTO_LOGOUT_SEC
+    def _check_idle_and_update(self):
+        """1초마다 시스템 유휴 시간 확인 및 UI 업데이트"""
+        if not self.root.winfo_exists():
+            return
+
+        # 잠금 상태면 유휴 시간 무시하고 타이머 계속 감소
+        if self._is_session_locked():
+            self.remaining_time = max(0, self.remaining_time - 1)
+        else:
+            idle_sec = self._get_system_idle_sec()
+            self.remaining_time = max(0, AUTO_LOGOUT_SEC - idle_sec)
+
+        if self.remaining_time <= 0:
+            self._auto_logout()
+        else:
+            text = self._format_remaining(self.remaining_time)
+            self.timer_label.config(text=f"{text} 후 자동 로그아웃")
+            self.root.after(1000, self._check_idle_and_update)
+
+    @staticmethod
+    def _get_system_idle_sec():
+        """Windows 시스템 유휴 시간(초) 반환"""
+        import ctypes
+
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+        lii = LASTINPUTINFO()
+        lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+
+        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+            return millis // 1000
+        return 0
+
+    @staticmethod
+    def _is_session_locked():
+        """Windows 세션 잠금 여부 확인"""
+        import ctypes
+        user32 = ctypes.windll.user32
+        DESKTOP_SWITCHDESKTOP = 0x0100
+        hDesktop = user32.OpenDesktopW("Default", 0, False, DESKTOP_SWITCHDESKTOP)
+        if hDesktop:
+            result = user32.SwitchDesktop(hDesktop)
+            user32.CloseDesktop(hDesktop)
+            return not result
+        return True
 
     @staticmethod
     def _format_remaining(seconds: int) -> str:
@@ -308,19 +346,11 @@ class PasswordManagerApp:
         parts.append(f"{s}초")
         return " ".join(parts)
 
-    def _update_countdown(self):
-        if not self.root.winfo_exists():
-            return
-        text = self._format_remaining(self.remaining_time)
-        self.timer_label.config(text=f"{text} 후 자동 로그아웃")
-        if self.remaining_time > 0:
-            self.remaining_time -= 1
-        self.root.after(1000, self._update_countdown)
-
     def _auto_logout(self):
         self.pw_svc.flush()
         self.key_svc.flush()
         self.aws_svc.flush()
         self.totp_svc.flush()
+        self.root.withdraw()  # 메인 창 숨기기
         messagebox.showinfo("자동 로그아웃", f"{AUTO_LOGOUT_SEC}초 동안 활동이 없어 프로그램을 종료합니다.")
         self.root.destroy()

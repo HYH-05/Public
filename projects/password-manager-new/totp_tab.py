@@ -87,7 +87,7 @@ class TotpTab(TabPanel):
                  callbacks: TabCallbacks, svc: PasswordService):
         # OTP 코드/남은 시간 열을 display에 추가
         self._otp_display_fields = TOTP_DISPLAY_FIELDS + ["OTP 코드", "남은 시간"]
-        self._combine_var = tk.BooleanVar(value=False)
+        self._combine_var = tk.BooleanVar(value=True)
 
         super().__init__(
             parent_left, parent_right, callbacks, svc,
