@@ -115,6 +115,10 @@ cs, bs = one(cur, "sshfail"), one(base, "sshfail")
 if cs is not None and bs is not None and cs != bs:
     changes.append(f"- 로그인 실패 건수(Linux SSH / Windows 4625, 각 점검 기간 기준): {bs} → {cs}")
 
+ch, bh = one(cur, "hwerr"), one(base, "hwerr")
+if ch is not None and bh is not None and ch != bh:
+    changes.append(f"- 하드웨어 오류 건수(Linux 커널 / Windows WHEA·RAID, 각 점검 기간 기준): {bh} → {ch}")
+
 # @ 오류 로그 유형: 이번에 처음 나온 것 / 사라진 것 / 두 번 다 있는데 건수가 바뀐 것
 ck, bk = log_kinds(cur_text), log_kinds(base_text)
 new = sorted(ck.keys() - bk.keys(), key=lambda k: -ck[k])
