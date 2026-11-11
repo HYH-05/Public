@@ -99,3 +99,6 @@ node_modules/
 
 # gitleaks 베이스라인 (선택적)
 # .gitleaks-baseline.json
+
+# gitleaks 설정 (로컬 전용, 탐지 키워드 노출 방지)
+.gitleaks.toml
