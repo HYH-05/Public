@@ -401,8 +401,109 @@ else
 fi
 echo ""
 
-# ! --- 5. 비교용 SNAPSHOT ---
-# @ compare.py가 지난 점검과 비교하는 값. 한 줄에 "키 값" 형식, 키: disk port user sudo boot sshfail
+# ! --- 5. 하드웨어 상태 ---
+# @ 수정 가능한 하드웨어 오류는 추세가 중요해 점검 기간과 별도로 90일을 본다.
+print_header "5. 하드웨어 상태"
+readonly HW_DAYS=90
+hw_err_count=""
+virt=$(systemd-detect-virt 2>/dev/null)
+echo "장비: $(cat /sys/class/dmi/id/sys_vendor 2>/dev/null) / $(cat /sys/class/dmi/id/product_name 2>/dev/null)"
+echo "BIOS: $(cat /sys/class/dmi/id/bios_version 2>/dev/null) ($(cat /sys/class/dmi/id/bios_date 2>/dev/null))"
+if [[ -n $virt && $virt != none ]]; then
+    echo "가상 머신: 예 ($virt, 하드웨어 항목 해당 없음)"
+    hw_err_count=0
+else
+    echo "가상 머신: 아니오 (물리 장비)"
+    echo ""
+
+    # @ EDAC: 메모리 컨트롤러가 집계한 ECC 오류 (부팅 이후 누적). 오류가 있는 DIMM만 따로 낸다.
+    echo "메모리 ECC 오류 (EDAC, 부팅 이후 누적):"
+    mcs=(/sys/devices/system/edac/mc/mc[0-9]*)
+    if [[ -d ${mcs[0]} ]]; then
+        for mc in "${mcs[@]}"; do
+            echo "  $(basename "$mc"): 수정 $(cat "$mc/ce_count") / 수정 불가 $(cat "$mc/ue_count")"
+            for d in "$mc"/dimm* "$mc"/rank*; do
+                [[ -f $d/dimm_ce_count ]] || continue
+                ce=$(cat "$d/dimm_ce_count"); ue=$(cat "$d/dimm_ue_count")
+                (( ce + ue > 0 )) && echo "    $(cat "$d/dimm_label" 2>/dev/null || basename "$d"): 수정 $ce / 수정 불가 $ue"
+            done
+        done
+    else
+        echo "  EDAC 미로드: 메모리 ECC 오류 확인 불가 (ECC 미지원 보드일 수 있음)"
+    fi
+    echo ""
+
+    # @ 커널이 남긴 하드웨어 오류: 메모리(EDAC/MCE), 디스크 I/O, ATA/NVMe 오류, md 어레이 이상
+    echo "커널 하드웨어 오류 메시지 (최근 ${HW_DAYS}일):"
+    hw_pattern='EDAC|Hardware Error|mce: |Machine check|I/O error|Medium Error|critical medium error|ata[0-9.]+: (exception|failed command|error)|nvme.*(timeout|I/O error|resetting)|md/raid.*(fail|degraded)|blk_update_request'
+    if hw_log=$(journalctl _TRANSPORT=kernel --since "${HW_DAYS} days ago" --no-pager -o short-iso 2>/dev/null); then
+        hw_lines=$(grep -E "$hw_pattern" <<< "$hw_log")
+        since_iso=$(date -d "$SINCE" +%Y-%m-%dT%H:%M:%S)
+        hw_err_count=$(awk -v s="$since_iso" 'NF && $1 >= s' <<< "$hw_lines" | wc -l)
+        echo "  ${HW_DAYS}일 합계 $(grep -c . <<< "$hw_lines")건 / 점검 기간(${CHECK_DAYS}일) ${hw_err_count}건"
+        if [[ -n $hw_lines ]]; then
+            echo "  [유형별 건수, 숫자는 #]"
+            cut -d' ' -f3- <<< "$hw_lines" | sed -E 's/[0-9]+/#/g' | sort | uniq -c | sort -rn | head -n 15
+            echo "  [월별 건수]"
+            cut -c1-7 <<< "$hw_lines" | uniq -c
+            echo "  [최근 10건]"
+            tail -n 10 <<< "$hw_lines"
+        fi
+    else
+        query_failed "커널 하드웨어 로그 조회 실패"
+    fi
+    echo ""
+
+    echo "소프트웨어 RAID (/proc/mdstat):"
+    if grep -q '^md' /proc/mdstat 2>/dev/null; then
+        grep -A1 '^md' /proc/mdstat | grep -v '^--'
+        grep -E 'recovery|resync|reshape' /proc/mdstat
+        echo "  디스크가 빠진 어레이: $(grep -cE '\[[U_]*_[U_]*\]' /proc/mdstat)개"
+    else
+        echo "  없음"
+    fi
+    echo ""
+
+    # @ 하드웨어 RAID 컨트롤러는 제조사 도구가 있어야 상태를 읽는다. 없으면 확인 불가로 남긴다.
+    echo "하드웨어 RAID 컨트롤러:"
+    raid_ctrl=$(lspci 2>/dev/null | grep -iE 'raid|sas|megaraid' | grep -v 'Volume Management Device')
+    if [[ -z $raid_ctrl ]]; then
+        echo "  없음"
+    else
+        sed 's/^/  /' <<< "$raid_ctrl"
+        raid_tool=""
+        for t in storcli64 storcli perccli64 perccli arcconf ssacli; do command -v "$t" >/dev/null && { raid_tool=$t; break; }; done
+        case $raid_tool in
+            storcli*|perccli*) timeout 60 "$raid_tool" /call show 2>/dev/null | grep -iE 'Status|Degrad|Offline|Fail|BBU|CV|Rbld|Dgrd|Pdgd' | head -n 30 ;;
+            arcconf) timeout 60 arcconf getconfig 1 AD 2>/dev/null | grep -iE 'Controller Status|Status of logical|Defunct|Degraded|Battery|Failed' | head -n 30 ;;
+            ssacli) timeout 60 ssacli ctrl all show status 2>/dev/null | head -n 30 ;;
+            *) echo "  관리 도구(storcli/perccli/arcconf/ssacli) 없음: 컨트롤러·개별 디스크·배터리 상태 확인 불가" ;;
+        esac
+    fi
+    echo ""
+
+    # @ SMART: 전체 판정과 수명 관련 값만 낸다. RAID 컨트롤러 뒤의 디스크는 미지원으로 나올 수 있다.
+    echo "디스크 SMART:"
+    if command -v smartctl >/dev/null; then
+        while read -r dev _ dtype _; do
+            [[ $dev == /dev/* ]] || continue
+            # * --scan 은 SATA 디스크도 scsi 로 알려 줘 판정이 빠진다. 자동 감지를 먼저 쓰고 안 되면 scan 유형으로 다시 읽는다.
+            out=$(timeout 30 smartctl -H -i -A "$dev" 2>/dev/null)
+            grep -qE 'overall-health|SMART Health Status' <<< "$out" || out=$(timeout 30 smartctl -H -i -A -d "$dtype" "$dev" 2>/dev/null)
+            model=$(grep -m1 -E '^(Device Model|Model Number|Product):' <<< "$out" | cut -d: -f2- | xargs)
+            health=$(grep -m1 -E 'overall-health|SMART Health Status' <<< "$out" | cut -d: -f2- | xargs)
+            attrs=$(awk '$1 ~ /^(5|187|197|198)$/ { printf "%s=%s ", $2, $10 }
+                /^(Critical Warning|Media and Data Integrity Errors|Percentage Used):/ { split($0, a, ":"); gsub(/^ +/, "", a[2]); printf "%s=%s ", a[1], a[2] }' <<< "$out")
+            echo "  $dev ($dtype) ${model:-모델 확인 불가}: ${health:-판정 없음(미지원)} ${attrs}"
+        done < <(smartctl --scan 2>/dev/null)
+    else
+        echo "  smartctl 미설치: 디스크 상태 확인 불가"
+    fi
+fi
+echo ""
+
+# ! --- 6. 비교용 SNAPSHOT ---
+# @ compare.py가 지난 점검과 비교하는 값. 한 줄에 "키 값" 형식, 키: disk port user sudo boot sshfail hwerr(점검 기간 커널 하드웨어 오류)
 echo "### SNAPSHOT ###"
 df -P -x tmpfs -x devtmpfs -x squashfs -x overlay 2>/dev/null | awk 'NR > 1 { sub("%", "", $5); print "disk", $6, $5 }' || { query_failed '디스크 스냅샷 조회 실패'; echo 'SNAPSHOT_FIELD_FAILED disk'; }
 ss -Htuln 2>/dev/null | awk '{ print "port", $1, $5 }' | sort -u || { query_failed '포트 스냅샷 조회 실패'; echo 'SNAPSHOT_FIELD_FAILED port'; }
@@ -420,6 +521,7 @@ if boot_time=$(uptime -s); then echo "boot $boot_time"; else
     query_failed '부팅 시각 조회 실패'; echo 'SNAPSHOT_FIELD_FAILED boot'
 fi
 if (( ssh_rc == 0 )); then echo "sshfail $ssh_fail"; else echo 'SNAPSHOT_FIELD_FAILED sshfail'; fi
+if [[ -n $hw_err_count ]]; then echo "hwerr $hw_err_count"; else echo 'SNAPSHOT_FIELD_FAILED hwerr'; fi
 echo "### END SNAPSHOT ###"
 echo ""
 

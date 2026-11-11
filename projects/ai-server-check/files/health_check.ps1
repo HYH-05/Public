@@ -56,6 +56,10 @@ function Invoke-Native([scriptblock]$Block) {
 # @ 같은 메시지를 묶기 위해 첫 줄만 쓰고 숫자는 # 으로 바꾼다.
 function Event-Key($e) {
     $msg = if ($e.Message) { ($e.Message -split "`r?`n")[0] } else { '(메시지 없음)' }
+    # * WHEA는 첫 줄이 모두 같아 구성 요소 줄을 붙인다.
+    if ($e.ProviderName -eq 'Microsoft-Windows-WHEA-Logger' -and $e.Message) {
+        $msg += ' ' + (($e.Message -split "`r?`n" | Where-Object { $_ -match '[:：]' } | ForEach-Object { $_.Trim() }) -join ', ')
+    }
     "$($e.ProviderName) [$($e.Id)] " + ($msg -replace '\d+', '#')
 }
 
@@ -312,8 +316,82 @@ try {
 } catch { Query-Failed "로그인 실패 기록 조회 실패: $_"; '로그인 실패 건수: 확인 불가' }
 ''
 
-# ! --- 5. 비교용 SNAPSHOT ---
-# @ compare.py가 지난 점검과 비교하는 값. 한 줄에 "키 값" 형식, 키: disk port user sudo boot sshfail
+# ! --- 5. 하드웨어 상태 ---
+# @ 수정 가능한 하드웨어 오류는 추세가 중요해 점검 기간과 별도로 90일을 본다.
+Print-Header '5. 하드웨어 상태'
+$HwDays = 90
+$HwSince = (Get-Date).AddDays(-$HwDays)
+$hwErrCount = $null
+$whPeriod = $null
+$isVm = $false
+try {
+    $cs = Get-CimInstance Win32_ComputerSystem
+    $bios = Get-CimInstance Win32_BIOS
+    $isVm = "$($cs.Manufacturer) $($cs.Model)" -match 'Virtual|VMware|KVM|QEMU|Xen|HVM'
+    "장비: $($cs.Manufacturer) / $($cs.Model)"
+    "BIOS: $($bios.SMBIOSBIOSVersion) ($(if ($bios.ReleaseDate) { $bios.ReleaseDate.ToString('yyyy-MM-dd') }))"
+    "가상 머신: $(if ($isVm) { '예 (하드웨어 항목 해당 없음)' } else { '아니오 (물리 장비)' })"
+} catch { Query-Failed "장비 정보 조회 실패: $_" }
+
+if (-not $isVm) {
+    ''
+    # * WHEA 메시지는 둘째 줄 이후에 구성 요소(메모리·프로세서·PCIe)가 있어 함께 읽는다.
+    "WHEA 하드웨어 오류 (최근 ${HwDays}일, 수정된 오류 포함):"
+    try {
+        $wh = @(Get-Events @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WHEA-Logger'; StartTime = $HwSince } 5000)
+        $whPeriod = @($wh | Where-Object { $_.TimeCreated -ge $Since })
+        "  ${HwDays}일 합계 $($wh.Count)건 / 점검 기간(${CheckDays}일) $($whPeriod.Count)건"
+        if ($wh.Count) {
+            '  [ID / 구성 요소 / 오류 유형별 건수]'
+            Group-Count ($wh | ForEach-Object {
+                $lines = $_.Message -split "`r?`n" | Where-Object { $_ -match '[:：]' } | ForEach-Object { $_.Trim() }
+                "ID $($_.Id) " + ($lines -join ', ')
+            }) 10
+            '  [월별 건수]'
+            $wh | Group-Object { $_.TimeCreated.ToString('yyyy-MM') } | Sort-Object Name | ForEach-Object { "    $($_.Name): $($_.Count)건" }
+            "  마지막 발생: $($wh[0].TimeCreated.ToString($Fmt))"
+            # @ 위치 값(Node/Card/Module)이 기록된 최근 이벤트. 슬롯 이름 대응은 보드마다 다르다.
+            $loc = $wh | Where-Object { $_.Id -in 19, 23, 47 } | ForEach-Object {
+                $d = @{}; ([xml]$_.ToXml()).Event.EventData.Data | ForEach-Object { $d[$_.Name] = "$($_.'#text')" }
+                if ($d['Card'] -and ($d['Node'] -ne '0x0' -or $d['Card'] -ne '0x0' -or $d['Module'] -ne '0x0')) {
+                    "  위치 기록 최근 이벤트: $($_.TimeCreated.ToString($Fmt)) ID $($_.Id) Node=$($d['Node']) Card=$($d['Card']) Module=$($d['Module']) Bank=$($d['Bank']) Rank=$($d['RankNumber'])"
+                }
+            } | Select-Object -First 1
+            if ($loc) { $loc } else { '  위치 기록 이벤트 없음' }
+        }
+    } catch { Query-Failed "WHEA 조회 실패: $_" }
+    ''
+    '메모리 모듈:'
+    try {
+        Get-CimInstance Win32_PhysicalMemory | ForEach-Object { '  {0} / {1} {2}GB {3}MHz {4}' -f $_.DeviceLocator, $_.BankLabel, ($_.Capacity / 1GB), $_.Speed, "$($_.PartNumber)".Trim() }
+    } catch { Query-Failed "메모리 모듈 조회 실패: $_" }
+    ''
+    # @ LSI/Intel/Broadcom MegaRAID 계열은 MR_MONITOR 출처로 Application 로그에 남긴다. 경고 등급까지 본다.
+    "RAID 컨트롤러 이벤트 (MR_MONITOR, 최근 ${HwDays}일 경고 이상):"
+    $raidPeriod = 0
+    if (Get-WinEvent -ListProvider MR_MONITOR -ErrorAction SilentlyContinue) {
+        try {
+            $mr = @(Get-Events @{ LogName = 'Application'; ProviderName = 'MR_MONITOR'; Level = 1, 2, 3; StartTime = $HwSince } 2000)
+            $raidPeriod = @($mr | Where-Object { $_.TimeCreated -ge $Since }).Count
+            if ($mr.Count -eq 0) { '  없음' }
+            $mr | Group-Object Id | ForEach-Object {
+                $last = $_.Group[0]
+                $text = ($last.Message -split "`r?`n" | Where-Object { $_ -match 'Controller ID' } | Select-Object -First 1)
+                if (-not $text) { $text = ($last.Message -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1) }
+                '  {0,4}건 ID {1} 마지막 {2} {3}' -f $_.Count, $_.Name, $last.TimeCreated.ToString($Fmt), "$text".Trim()
+            }
+        } catch { Query-Failed "RAID 이벤트 조회 실패: $_" }
+    } else { '  RAID 모니터(MR_MONITOR) 미설치: 컨트롤러·개별 디스크·배터리 상태 확인 불가' }
+    ''
+    '디스크 상태 (RAID 컨트롤러 뒤의 디스크는 가상 디스크로 보인다):'
+    try {
+        Get-PhysicalDisk | Sort-Object DeviceId | ForEach-Object { '  {0} {1} {2:N0}GB Health={3} Op={4}' -f $_.DeviceId, $_.FriendlyName, ($_.Size / 1GB), $_.HealthStatus, ($_.OperationalStatus -join '/') }
+    } catch { Query-Failed "디스크 상태 조회 실패: $_" }
+    if ($null -ne $whPeriod) { $hwErrCount = $whPeriod.Count + $raidPeriod }
+} else { $hwErrCount = 0 }
+
+# ! --- 6. 비교용 SNAPSHOT ---
+# @ compare.py가 지난 점검과 비교하는 값. 한 줄에 "키 값" 형식, 키: disk port user sudo boot sshfail hwerr(점검 기간 WHEA+RAID 경고)
 '### SNAPSHOT ###'
 if ($disks) { $disks | Where-Object Size | ForEach-Object { "disk $($_.DeviceID) $([math]::Round(100 * ($_.Size - $_.FreeSpace) / $_.Size))" } }
 else { Query-Failed '디스크 스냅샷 조회 실패'; 'SNAPSHOT_FIELD_FAILED disk' }
@@ -326,6 +404,7 @@ else { Query-Failed '관리자 그룹 스냅샷 조회 실패'; 'SNAPSHOT_FIELD_
 if ($os) { "boot $($os.LastBootUpTime.ToString($Fmt))" }
 else { Query-Failed '부팅 시각 조회 실패'; 'SNAPSHOT_FIELD_FAILED boot' }
 if ($null -ne $failCount) { "sshfail $failCount" } else { 'SNAPSHOT_FIELD_FAILED sshfail' }
+if ($null -ne $hwErrCount) { "hwerr $hwErrCount" } else { 'SNAPSHOT_FIELD_FAILED hwerr' }
 '### END SNAPSHOT ###'
 ''
 '================================================='
