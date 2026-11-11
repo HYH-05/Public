@@ -4,7 +4,8 @@
   gather_facts: no
   become: yes
   tasks:
-    - name: 제한 시간 안에 점검 수집
+    - name: 제한 시간 안에 점검 수집 (Linux)
+      when: "'windows' not in group_names"
       block:
         - name: 임시 점검 파일 생성
           ansible.builtin.tempfile:
@@ -27,26 +28,60 @@
               - "{{ check_days | default(7) | string }}"
           async: "{{ (collect_timeout | default(600) | int) + 20 }}"
           poll: 5
-          register: hc
+          register: hc_linux
           failed_when: false
           changed_when: false
-        - name: 점검 결과 저장
-          ansible.builtin.copy:
-            content: "{{ (hc.stdout | default('')) ~ '\n' ~ (hc.stderr | default('')) ~ '\n' ~ (hc.msg | default('')) }}"
-            dest: "{{ out_dir }}/{{ inventory_hostname }}.txt"
-            mode: '0600'
-          delegate_to: localhost
-          become: no
-        - name: 수집 상태 저장
-          ansible.builtin.copy:
-            content: "{{ {'rc': hc.rc | default(-1), 'unreachable': hc.unreachable | default(false)} | to_json }}"
-            dest: "{{ out_dir }}/{{ inventory_hostname }}.status.json"
-            mode: '0600'
-          delegate_to: localhost
-          become: no
       always:
         - name: 임시 점검 파일 제거
           ansible.builtin.file:
             path: "{{ check_file.path }}"
             state: absent
           when: check_file.path is defined
+
+    # * Windows는 sudo가 없고 접속 계정이 관리자다. 제한 시간은 async가 대신한다.
+    - name: 제한 시간 안에 점검 수집 (Windows)
+      when: "'windows' in group_names"
+      become: no
+      block:
+        - name: 임시 점검 파일 생성
+          ansible.windows.win_tempfile:
+            state: file
+            prefix: ai-health-
+            suffix: .ps1
+          register: win_check_file
+        - name: 점검 파일 전송
+          ansible.windows.win_copy:
+            src: files/health_check.ps1
+            dest: "{{ win_check_file.path }}"
+        - name: 점검 실행
+          ansible.windows.win_shell: "& '{{ win_check_file.path }}' {{ check_days | default(7) | int }}; exit $LASTEXITCODE"
+          async: "{{ collect_timeout | default(600) | int }}"
+          poll: 5
+          register: hc_windows
+          failed_when: false
+          changed_when: false
+      always:
+        - name: 임시 점검 파일 제거
+          ansible.windows.win_file:
+            path: "{{ win_check_file.path }}"
+            state: absent
+          when: win_check_file.path is defined
+
+    - name: 점검 결과 저장
+      vars:
+        hc: "{{ hc_windows if 'windows' in group_names else hc_linux }}"
+      ansible.builtin.copy:
+        content: "{{ (hc.stdout | default('')) ~ '\n' ~ (hc.stderr | default('')) ~ '\n' ~ (hc.msg | default('')) }}"
+        dest: "{{ out_dir }}/{{ inventory_hostname }}.txt"
+        mode: '0600'
+      delegate_to: localhost
+      become: no
+    - name: 수집 상태 저장
+      vars:
+        hc: "{{ hc_windows if 'windows' in group_names else hc_linux }}"
+      ansible.builtin.copy:
+        content: "{{ {'rc': hc.rc | default(-1), 'unreachable': hc.unreachable | default(false)} | to_json }}"
+        dest: "{{ out_dir }}/{{ inventory_hostname }}.status.json"
+        mode: '0600'
+      delegate_to: localhost
+      become: no
