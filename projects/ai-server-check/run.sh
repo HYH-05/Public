@@ -44,7 +44,9 @@ analyze_host() {
         touch "$OUT/pipeline.failed" "$OUT/errors/$host.compare.failed"
         echo '비교 실패: 과거 대비 변화 판단 불가' > "$OUT/diff/$host.md"
     fi
-    prompt=$(cat "$PROMPTS/server.md"); prompt=${prompt//\{\{HOST\}\}/$host}
+    prompt_file=server.md
+    grep -q '^점검 대상 OS: Windows$' "$raw" && prompt_file=server_windows.md
+    prompt=$(cat "$PROMPTS/$prompt_file"); prompt=${prompt//\{\{HOST\}\}/$host}
     if cat "$OUT/diff/$host.md" <(echo) "$raw" | agent "$prompt" > "$OUT/analysis/$host.md.tmp" 2> "$OUT/errors/$host.agent.log" \
         && python3 "$BASE/report_status.py" validate "$OUT/analysis/$host.md.tmp"; then
         mv "$OUT/analysis/$host.md.tmp" "$OUT/analysis/$host.md" || return 1

@@ -102,7 +102,7 @@ for m in sorted(cd.keys() | bd.keys()):
     else:
         changes.append(f"- 디스크 {m}: 이번에 안 보임 (지난번 {bd[m]}%)")
 
-for key, label in (("port", "리스닝 포트"), ("user", "계정(UID 1000 이상)"), ("sudo", "sudoers 항목")):
+for key, label in (("port", "리스닝 포트"), ("user", "계정"), ("sudo", "관리자 권한 항목(sudoers/Administrators)")):
     c, b = cur.get(key, set()), base.get(key, set())
     changes += [f"- {label} 추가: `{x}`" for x in sorted(c - b)]
     changes += [f"- {label} 제거: `{x}`" for x in sorted(b - c)]
@@ -113,7 +113,7 @@ if cb and bb and cb != bb:
 
 cs, bs = one(cur, "sshfail"), one(base, "sshfail")
 if cs is not None and bs is not None and cs != bs:
-    changes.append(f"- SSH 로그인 실패 건수(각 점검 기간 기준): {bs} → {cs}")
+    changes.append(f"- 로그인 실패 건수(Linux SSH / Windows 4625, 각 점검 기간 기준): {bs} → {cs}")
 
 # @ 오류 로그 유형: 이번에 처음 나온 것 / 사라진 것 / 두 번 다 있는데 건수가 바뀐 것
 ck, bk = log_kinds(cur_text), log_kinds(base_text)
