@@ -7,6 +7,7 @@
 ```
 .
 ├── projects/                           # 독립 프로젝트
+│   ├── ai-server-check/                # Ansible + Claude 주간 서버 점검
 │   ├── monitoring-dashboard/           # 통합 모니터링 GUI (Python/Tkinter)
 │   └── password-manager/               # 패스워드 관리 도구 (Python/Tkinter)
 │
