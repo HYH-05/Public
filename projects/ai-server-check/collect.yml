@@ -1,0 +1,52 @@
+---
+- name: 서버 점검 데이터 수집
+  hosts: all
+  gather_facts: no
+  become: yes
+  tasks:
+    - name: 제한 시간 안에 점검 수집
+      block:
+        - name: 임시 점검 파일 생성
+          ansible.builtin.tempfile:
+            state: file
+            prefix: ai-health-
+          register: check_file
+        - name: 점검 파일 전송
+          ansible.builtin.copy:
+            src: files/health_check.sh
+            dest: "{{ check_file.path }}"
+            mode: '0700'
+        - name: 점검 실행
+          ansible.builtin.command:
+            argv:
+              - timeout
+              - --kill-after=10
+              - "{{ collect_timeout | default(600) | string }}"
+              - bash
+              - "{{ check_file.path }}"
+              - "{{ check_days | default(7) | string }}"
+          async: "{{ (collect_timeout | default(600) | int) + 20 }}"
+          poll: 5
+          register: hc
+          failed_when: false
+          changed_when: false
+        - name: 점검 결과 저장
+          ansible.builtin.copy:
+            content: "{{ (hc.stdout | default('')) ~ '\n' ~ (hc.stderr | default('')) ~ '\n' ~ (hc.msg | default('')) }}"
+            dest: "{{ out_dir }}/{{ inventory_hostname }}.txt"
+            mode: '0600'
+          delegate_to: localhost
+          become: no
+        - name: 수집 상태 저장
+          ansible.builtin.copy:
+            content: "{{ {'rc': hc.rc | default(-1), 'unreachable': hc.unreachable | default(false)} | to_json }}"
+            dest: "{{ out_dir }}/{{ inventory_hostname }}.status.json"
+            mode: '0600'
+          delegate_to: localhost
+          become: no
+      always:
+        - name: 임시 점검 파일 제거
+          ansible.builtin.file:
+            path: "{{ check_file.path }}"
+            state: absent
+          when: check_file.path is defined

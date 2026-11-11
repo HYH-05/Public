@@ -1,0 +1,7 @@
+inventory.ini
+reports/
+raw/
+baseline/
+backup/
+.run.lock
+*.env
