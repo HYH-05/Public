@@ -1,0 +1,42 @@
+aws_account_id = "000000000000"
+name_prefix    = "pm"
+
+# 예시 네트워크다. 실제 네트워크는 Git에서 제외되는 terraform.tfvars에 입력한다.
+vpc_cidrs = {
+  live  = "172.20.0.0/22"
+  admin = "172.20.4.0/22"
+  qa    = "172.20.8.0/22"
+}
+
+# 아래 AMI·키·인증서·주소는 예시다. 배포 전에 반드시 실제 값으로 교체한다.
+# 공식 Rocky 10.2 EC2 Base 빌드를 자동 조회한다. 실제 ID는 인증 후 plan에서 확정한다.
+rocky_ami_id   = null
+key_pair_name = "replace-with-existing-key-pair"
+vpn_ingress_cidrs = ["203.0.113.10/32"]
+vpn_ssh_cidrs     = ["203.0.113.10/32"]
+
+certificate_arns = {
+  live = "arn:aws:acm:ap-northeast-2:000000000000:certificate/00000000-0000-0000-0000-000000000000"
+  qa   = "arn:aws:acm:ap-northeast-2:000000000000:certificate/00000000-0000-0000-0000-000000000000"
+}
+
+domains = {
+  live_pms   = "pms.example.com"
+  live_admin = "pms-admin.example.com"
+  qa_pms     = "qa-pms.example.com"
+  qa_admin   = "qa-pms-admin.example.com"
+}
+
+# 기존 Route 53 레코드 관리가 필요할 때만 지정한다. 기존 레코드는 import가 필요하다.
+dns_zone_ids = {}
+
+enable_temporary_nat = true
+
+# NodeJS CPU·메모리는 임시 기본값이며 OS 제외 데이터는 128GiB다.
+instance_types = {
+  live_admin = "t3.small"
+}
+live_admin_data_gib = 128
+
+# 실제 운영 마운트 경로는 로컬 terraform.tfvars에 지정한다.
+data_mount_path = "/data"

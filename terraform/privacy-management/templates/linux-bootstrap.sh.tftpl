@@ -1,0 +1,231 @@
+#!/bin/bash
+set -Eeuo pipefail
+umask 022
+
+install -d -m 0755 /var/lib/pm-bootstrap
+exec > >(tee -a /var/log/pm-bootstrap.log) 2>&1
+trap 'result=$?; printf "Bootstrap failed at line %s (exit %s)\n" "$LINENO" "$result" >&2; exit "$result"' ERR
+rm -f /var/lib/pm-bootstrap/complete
+
+. /etc/os-release
+if [[ "$ID" != rocky || "$VERSION_ID" != 10* ]]; then
+  echo 'Rocky Linux 10 is required.' >&2
+  exit 1
+fi
+
+# VPN EIP 연결과 NAT·저장소 초기 응답을 기다린다.
+retry() {
+  local attempt
+  for attempt in 1 2 3 4 5 6; do
+    if "$@"; then
+      return 0
+    fi
+    if [[ "$attempt" -lt 6 ]]; then
+      sleep 20
+    fi
+  done
+  return 1
+}
+
+retry dnf -y install dnf-plugins-core
+retry dnf config-manager --set-enabled crb
+retry dnf -y install epel-release
+retry dnf -y install \
+  vim-enhanced less net-tools nmap iputils cronie rsyslog unzip psmisc \
+  sysbench vnstat htop sysstat man-db iotop-c telnet rsync lsof tree nmon \
+  parted smartmontools zstd zip chrony util-linux xfsprogs logrotate
+
+hostnamectl set-hostname '${server_hostname}'
+cat > /etc/cloud/cloud.cfg.d/99-pm-hostname.cfg <<'PM_HOSTNAME'
+preserve_hostname: true
+PM_HOSTNAME
+timedatectl set-timezone Asia/Seoul
+
+# 인터넷 UDP 123 없이 AWS 내부 시간 동기화 경로를 사용한다.
+awk '!/^[[:space:]]*(server|pool|peer)[[:space:]]/' /etc/chrony.conf > /etc/chrony.conf.pm-tmp
+printf '\nserver 169.254.169.123 prefer iburst minpoll 4 maxpoll 4\n' >> /etc/chrony.conf.pm-tmp
+install -m 0644 /etc/chrony.conf.pm-tmp /etc/chrony.conf
+rm -f /etc/chrony.conf.pm-tmp
+
+install -d -m 0755 /etc/profile.d /etc/vim /etc/skel
+cat > /etc/profile.d/90-pm-shell.sh <<'PM_SHELL'
+case $- in
+  *i*) ;;
+  *) return ;;
+esac
+
+alias ll='ls -al'
+alias vi='vim'
+
+if [[ "$${TERM:-dumb}" == dumb ]]; then
+  PS1='\u@\h:\w\$ '
+else
+  case '${deployment_environment}' in
+    live) PS1='\[\e[31m\]\u@\h\[\e[0m\]:\w\$ ' ;;
+    qa)   PS1='\[\e[33m\]\u@\h\[\e[0m\]:\w\$ ' ;;
+  esac
+fi
+PM_SHELL
+chmod 0644 /etc/profile.d/90-pm-shell.sh
+
+# 로그인·비로그인 대화형 Bash 모두 동일 설정을 읽는다.
+if ! grep -Fqx '# PM common shell settings' /etc/bashrc; then
+  cat >> /etc/bashrc <<'PM_BASHRC'
+
+# PM common shell settings
+if [ -r /etc/profile.d/90-pm-shell.sh ]; then
+    . /etc/profile.d/90-pm-shell.sh
+fi
+PM_BASHRC
+fi
+
+cat > /etc/vim/pm-common.vim <<'PM_VIMRC'
+set autoindent " 자동 들여쓰기
+set smartindent " 자동 들여쓰기
+set smarttab
+
+set history=500 " 명령어 히스토리
+
+"set tabstop=2 " 탭 크기
+set shiftwidth=2 " 탭 크기
+"set softtabstop=2 " 탭 크기
+
+set hlsearch " 검색어 하이라이팅
+set showmatch " 일치하는 괄호 하이라이팅
+set ruler " 현재 커서 위치 표시
+set wildmode=longest,list " 명령어 자동 완성
+"set smartcase " 검색시 대소문자 구별
+
+set laststatus=2 " 상태바 표시 항상
+set incsearch
+let &statusline = ' %<%l:%v [%P]%=%a %h%m%r %F '
+
+" F1 누를시 현재 라인 주석, 범위 설정 후 누르면 범위 주석
+map <F1> :norm I#<CR>
+" F2 누를시 # 주석만 해제하고 일반 텍스트는 보존한다.
+map <F2> :s/^\(\s*\)#/\1/e<CR>
+
+" F3 누를시 파일 탐색기
+map <F3> :vertical Lexplore 30<CR>
+" 이전 버퍼, 다음 버퍼
+map <F4> :bp<CR>
+map <F5> :bn<CR>
+map <F9> :set number<CR>
+map <F10> :set nonumber<CR>
+
+vmap <Tab> >gv
+vmap <S-Tab> <gv
+map <C-l> V
+vmap <C-l> j
+
+augroup pm_restore_cursor
+  autocmd!
+  autocmd BufReadPost *
+        \ if line("'\"") > 0 && line("'\"") <= line("$") |
+        \ execute "normal! g`\"" |
+        \ endif
+augroup END
+
+colorscheme default
+syntax enable
+filetype plugin on
+PM_VIMRC
+chmod 0644 /etc/vim/pm-common.vim
+
+add_vimrc_source() {
+  local target_file="$1"
+  if ! grep -Fqx 'source /etc/vim/pm-common.vim' "$target_file" 2>/dev/null; then
+    printf '\nsource /etc/vim/pm-common.vim\n' >> "$target_file"
+  fi
+}
+
+add_vimrc_source /etc/skel/.vimrc
+while IFS=: read -r account_name account_password account_uid account_gid account_gecos account_home account_shell; do
+  if [[ "$account_uid" -ne 0 && "$account_uid" -lt 1000 ]]; then
+    continue
+  fi
+  case "$account_shell" in
+    */bash|*/sh) ;;
+    *) continue ;;
+  esac
+  if [[ -d "$account_home" ]]; then
+    add_vimrc_source "$account_home/.vimrc"
+    chown "$account_uid:$account_gid" "$account_home/.vimrc"
+  fi
+done < <(getent passwd)
+
+if [[ -n '${data_volume_id}' ]]; then
+  data_mount_path='${data_mount_path}'
+  install -d -m 0755 /usr/local/sbin
+  cat > /usr/local/sbin/pm-mount-data-disk <<'PM_DATA_MOUNT'
+${mount_script}
+PM_DATA_MOUNT
+  chmod 0700 /usr/local/sbin/pm-mount-data-disk
+
+  if [[ '${protect_mysql}' == true ]]; then
+    mount_unit=$(systemd-escape --path --suffix=mount "$data_mount_path")
+    install -d -m 0755 /etc/systemd/system/mysqld.service.d
+    cat > /etc/systemd/system/mysqld.service.d/10-data-mount.conf <<PM_MYSQL_MOUNT
+[Unit]
+RequiresMountsFor=$data_mount_path
+BindsTo=$mount_unit
+After=$mount_unit
+AssertPathIsMountPoint=$data_mount_path
+PM_MYSQL_MOUNT
+    systemctl daemon-reload
+  fi
+
+  /usr/local/sbin/pm-mount-data-disk '${data_volume_id}' "$data_mount_path"
+fi
+
+install -d -m 0755 /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/90-pm-retention.conf <<'PM_JOURNAL'
+[Journal]
+Storage=persistent
+Compress=yes
+MaxRetentionSec=30day
+SystemMaxUse=1G
+PM_JOURNAL
+systemctl restart systemd-journald.service
+journalctl --flush
+
+# rsyslog가 관리하는 일반 시스템 로그만 대상으로 한다.
+cat > /etc/logrotate.d/syslog <<'PM_SYSLOG'
+/var/log/cron
+/var/log/maillog
+/var/log/messages
+/var/log/secure
+/var/log/spooler
+{
+    daily
+    rotate 90
+    maxage 90
+    missingok
+    notifempty
+    compress
+    delaycompress
+    sharedscripts
+    postrotate
+        /usr/bin/systemctl kill -s HUP rsyslog.service >/dev/null 2>&1 || true
+    endscript
+}
+PM_SYSLOG
+cat > /etc/logrotate.d/pm-bootstrap <<'PM_BOOTSTRAP_LOG'
+/var/log/pm-bootstrap.log {
+    daily
+    rotate 90
+    maxage 90
+    missingok
+    notifempty
+    compress
+    copytruncate
+}
+PM_BOOTSTRAP_LOG
+
+systemctl enable --now crond.service rsyslog.service vnstat.service chronyd.service
+systemctl restart chronyd.service
+systemctl enable --now sysstat.service sysstat-collect.timer sysstat-summary.timer
+systemctl enable --now logrotate.timer
+
+touch /var/lib/pm-bootstrap/complete
+echo 'Common Linux bootstrap completed.'
