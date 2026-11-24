@@ -1,0 +1,4 @@
+# 원격 state 저장소가 준비되면 backend.tf로 복사하고 다시 init한다.
+terraform {
+  backend "s3" {}
+}
